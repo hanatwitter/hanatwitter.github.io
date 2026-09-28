@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Compare Slider</title>
+<meta name="description" content="Pick two images, drag the bar to spot the differences, and export a smooth looping GIF. Runs entirely in your browser.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f8;
+    --surface: #ffffff;
+    --text: #15171c;
+    --muted: #5b6270;
+    --line: #dde0e7;
+    --accent: #3559e6;
+    --accent-ink: #ffffff;
+    --danger: #c0362c;
+    --stage-bg: #0f1115;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f14;
+      --surface: #161920;
+      --text: #e8eaf0;
+      --muted: #9aa2b1;
+      --line: #272b35;
+      --accent: #7c96ff;
+      --accent-ink: #0a1030;
+      --danger: #ff8378;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .app { max-width: 1120px; margin: 0 auto; padding: 28px 16px 72px; }
+  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.01em; }
+  h2 { margin: 0 0 6px; font-size: 17px; }
+  .lede { margin: 0 0 22px; color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .hint { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+  /* ---- image slots ---- */
+  .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .slot {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; min-width: 0;
+    background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius);
+    transition: border-color .15s, background-color .15s;
+  }
+  .slot.filled { border-style: solid; }
+  .slot.dragover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+  .thumb {
+    flex: none; width: 56px; height: 56px; border-radius: 8px;
+    background: var(--bg) center / cover no-repeat; border: 1px solid var(--line);
+  }
+  .slot-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .slot-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .slot-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slot-dims { font-size: 13px; color: var(--muted); }
+
+  .btn {
+    appearance: none; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 14px; border-radius: 9px;
+    font: inherit; font-weight: 600; text-decoration: none;
+    color: var(--text); background: var(--surface); border: 1px solid var(--line);
+  }
+  .btn:hover:not(:disabled) { border-color: var(--muted); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: transparent; }
+  :where(button, input, select, .btn):focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+
+  .notice {
+    margin: 0 0 14px; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--line));
+    background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+    color: var(--text);
+  }
+
+  /* ---- comparison stage ---- */
+  .stage-empty {
+    display: grid; place-items: center; text-align: center;
+    min-height: 260px; padding: 24px;
+    border: 1px dashed var(--line); border-radius: var(--radius); color: var(--muted);
+  }
+  .stage {
+    position: relative; margin: 0 auto; overflow: hidden;
+    width: min(100%, calc(72vh * var(--ar)));
+    aspect-ratio: var(--ar);
+    background: var(--stage-bg);
+    border-radius: 10px;
+    cursor: ew-resize; user-select: none; -webkit-user-select: none;
+    touch-action: pan-y;
+    --pos: 0.5; --ar: 1.5;
+    box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.14);
+  }
+  .pane { position: absolute; inset: 0; background: var(--stage-bg); }
+  .pane img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; -webkit-user-drag: none; }
+  .stage.fit-fill .pane img { object-fit: fill; }
+  .pane-b { clip-path: inset(0 0 0 calc(var(--pos) * 100%)); }
+
+  .divider { position: absolute; top: 0; bottom: 0; left: calc(var(--pos) * 100%); width: 0; pointer-events: none; }
+  .divider .line {
+    position: absolute; top: 0; bottom: 0; left: -2px; width: 4px;
+    background: #fff; box-shadow: 0 0 0 1px rgba(20,22,28,.85);
+  }
+  .handle {
+    position: absolute; top: 50%; left: 0; width: 46px; height: 46px;
+    transform: translate(-50%, -50%);
+    padding: 0; border-radius: 50%; cursor: ew-resize; pointer-events: auto;
+    background: #fff; color: #14161c; border: 3px solid #14161c;
+    display: grid; place-items: center;
+  }
+  .handle svg { width: 100%; height: 100%; fill: currentColor; }
+
+  .tag {
+    position: absolute; bottom: 10px; max-width: 42%;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 12.5px; font-weight: 600; color: #fff; background: rgba(12,14,18,.66);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    pointer-events: none; transition: opacity .15s;
+  }
+  .tag-a { left: 10px; } .tag-b { right: 10px; }
+  .tag.off { opacity: 0; }
+
+  /* ---- toolbar ---- */
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 14px 0 22px; }
+  .toolbar .grow { flex: 1; }
+  .field { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--surface); }
+  .seg label { position: relative; cursor: pointer; }
+  .seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .seg span { display: block; padding: 6px 12px; color: var(--text); font-size: 13.5px; font-weight: 600; }
+  .seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
+  .seg input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -3px; }
+  .seg label + label { border-left: 1px solid var(--line); }
+
+  /* ---- export ---- */
+  .options { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; margin: 14px 0; }
+  .options label { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+  select {
+    font: inherit; padding: 6px 8px; border-radius: 8px;
+    min-width: 0; max-width: 100%;
+    color: var(--text); background: var(--surface); border: 1px solid var(--line);
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .progress { margin-top: 14px; }
+  .bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
+  #progressText { display: block; margin-top: 6px; font-size: 13.5px; color: var(--muted); }
+  .result { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .result img { display: block; width: 100%; height: auto; border-radius: 8px; background: var(--stage-bg); }
+  .result-meta { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+  .result-meta p { margin: 0; }
+  .facts { color: var(--muted); font-size: 13.5px; }
+
+  [hidden] { display: none !important; }
+
+  @media (max-width: 700px) {
+    .slots { grid-template-columns: 1fr; }
+    .result { grid-template-columns: 1fr; }
+    .options label { display: flex; flex-wrap: wrap; width: 100%; }
+    .options select { flex: 1 1 12rem; }
+    h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Image Compare Slider</h1>
+  <p class="lede">Choose two images, drag the bar to reveal the differences, then export a smooth looping GIF. Your images never leave this page.</p>
+
+  <noscript><p class="notice">This tool needs JavaScript.</p></noscript>
+  <p class="notice" id="notice" role="alert" hidden></p>
+
+  <section class="slots" aria-label="Images to compare">
+    <div class="slot" data-slot="0">
+      <div class="thumb" aria-hidden="true"></div>
+      <div class="slot-text">
+        <span class="slot-label">Image 1 · left</span>
+        <span class="slot-name">Drop an image or choose a file</span>
+        <span class="slot-dims"></span>
+      </div>
+      <button type="button" class="btn slot-btn">Choose…</button>
+      <input type="file" accept="image/*" hidden>
+    </div>
+    <div class="slot" data-slot="1">
+      <div class="thumb" aria-hidden="true"></div>
+      <div class="slot-text">
+        <span class="slot-label">Image 2 · right</span>
+        <span class="slot-name">Drop an image or choose a file</span>
+        <span class="slot-dims"></span>
+      </div>
+      <button type="button" class="btn slot-btn">Choose…</button>
+      <input type="file" accept="image/*" hidden>
+    </div>
+  </section>
+
+  <div class="stage-empty" id="stageEmpty">
+    <div>
+      <strong>Pick two images to start comparing</strong><br>
+      Use the buttons above, or drop both files anywhere on this page.
+    </div>
+  </div>
+
+  <div class="stage" id="stage" hidden>
+    <div class="pane pane-a"><img id="imgA" alt="Image 1" draggable="false"></div>
+    <div class="pane pane-b"><img id="imgB" alt="Image 2" draggable="false"></div>
+    <div class="tag tag-a" id="tagA"></div>
+    <div class="tag tag-b" id="tagB"></div>
+    <div class="divider">
+      <span class="line"></span>
+      <button type="button" class="handle" id="handle" role="slider"
+              aria-label="Comparison position" aria-orientation="horizontal"
+              aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
+        <svg viewBox="0 0 46 46" aria-hidden="true"><path d="M18.4 15.2 9.8 23l8.6 7.8z"/><path d="M27.6 15.2 36.2 23l-8.6 7.8z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="toolbar" id="toolbar">
+    <button type="button" class="btn" id="btnSwap" disabled>⇄ Swap images</button>
+    <div class="field">Fit
+      <div class="seg" role="radiogroup" aria-label="How to fit differently sized images">
+        <label><input type="radio" name="fit" value="contain" checked><span>Keep aspect</span></label>
+        <label><input type="radio" name="fit" value="fill"><span>Stretch</span></label>
+      </div>
+    </div>
+    <div class="field">Background
+      <div class="seg" role="radiogroup" aria-label="Background behind transparent or letterboxed areas">
+        <label><input type="radio" name="bg" value="dark" checked><span>Dark</span></label>
+        <label><input type="radio" name="bg" value="gray"><span>Gray</span></label>
+        <label><input type="radio" name="bg" value="light"><span>Light</span></label>
+      </div>
+    </div>
+    <span class="grow"></span>
+    <span class="hint" id="dragHint" hidden>Drag anywhere on the image · arrow keys nudge the bar</span>
+  </div>
+
+  <section class="card" id="exportCard" aria-labelledby="exportTitle">
+    <h2 id="exportTitle">Export as GIF</h2>
+    <p class="hint">A seamless 4-second loop: the bar starts in the middle, glides to the far left, sweeps across to the far right, then eases back to the middle.</p>
+    <div class="options">
+      <label>Max size
+        <select id="optSize">
+          <option value="640">640 px</option>
+          <option value="800">800 px</option>
+          <option value="1024">1024 px</option>
+          <option value="1280" selected>1280 px</option>
+          <option value="1600">1600 px</option>
+          <option value="1920">1920 px</option>
+        </select>
+        <span class="hint" id="sizeHint"></span>
+      </label>
+      <label>Frame rate
+        <select id="optFps">
+          <option value="50" selected>50 fps · silky smooth (200 frames)</option>
+          <option value="25">25 fps · smaller file (100 frames)</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="optDither" checked> Dithering (smoother gradients)</label>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn primary" id="btnGif" disabled>Create GIF</button>
+      <button type="button" class="btn" id="btnCancel" hidden>Cancel</button>
+    </div>
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><span id="progressFill"></span></div>
+      <span id="progressText" aria-live="polite"></span>
+    </div>
+    <div class="result" id="result" hidden>
+      <img id="gifPreview" alt="Generated comparison GIF">
+      <div class="result-meta">
+        <p class="facts" id="resultInfo"></p>
+        <a class="btn primary" id="btnDownload">⬇ Download GIF</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- The GIF builder runs in a Web Worker created from this text, so the page stays responsive
+     and everything still works when index.html is opened straight from disk. -->
+<script type="text/plain" id="gif-worker-src">
+'use strict';
+
+// ---------------------------------------------------------------------------
+//  GIF builder
+//
+//  Both images are reduced to ONE shared palette and converted to palette
+//  indices once. Every animation frame is then assembled from those indices
+//  (left of the bar = image 1, right = image 2, plus the bar graphic), so:
+//    * colours can never flicker between frames (there is a single palette),
+//    * each frame only stores the rectangle of pixels that changed, which keeps
+//      a 200-frame, 50 fps animation to a sensible size.
+// ---------------------------------------------------------------------------
+
+const WR = 3, WG = 4, WB = 2;   // channel weights used for colour distance
+const RAMP = 5;                 // reserved palette slots for the bar: white, three greys, dark
+const MAX_COLORS = 256 - RAMP - 1;   // ...and one more slot for "transparent"
+
+self.onmessage = (e) => {
+  try {
+    const bytes = createGif(e.data);
+    self.postMessage({ type: 'done', bytes }, [bytes.buffer]);
+  } catch (err) {
+    self.postMessage({ type: 'error', message: (err && err.message) || String(err) });
+  }
+};
+
+function progress(stage, value) {
+  self.postMessage({ type: 'progress', stage, value });
+}
+
+class ByteSink {
+  constructor(size) { this.buf = new Uint8Array(size); this.len = 0; }
+  need(n) {
+    if (this.len + n <= this.buf.length) return;
+    const grown = new Uint8Array(Math.max(this.buf.length * 2, this.len + n));
+    grown.set(this.buf.subarray(0, this.len));
+    this.buf = grown;
+  }
+  byte(b) { this.need(1); this.buf[this.len++] = b; }
+  u16(v) { this.need(2); this.buf[this.len++] = v & 255; this.buf[this.len++] = (v >> 8) & 255; }
+  bytes(arr) { this.need(arr.length); this.buf.set(arr, this.len); this.len += arr.length; }
+  ascii(s) { for (let i = 0; i < s.length; i++) this.byte(s.charCodeAt(i)); }
+  result() { return this.buf.slice(0, this.len); }
+}
+
+// ---- LZW (GIF flavour: variable 3..12 bit codes, sub-blocks of <=255 bytes) ----
+const lzwTable = new Uint16Array(4096 * 256);
+const lzwBlock = new Uint8Array(255);
+
+function lzwCompress(pixels, count, minCodeSize, out) {
+  const clear = 1 << minCodeSize, eoi = clear + 1;
+  let codeSize = minCodeSize + 1;
+  let nextCode = eoi + 1;
+  let acc = 0, accBits = 0, blockLen = 0;
+
+  const put = (code) => {
+    acc |= code << accBits;
+    accBits += codeSize;
+    while (accBits >= 8) {
+      lzwBlock[blockLen++] = acc & 255;
+      acc >>>= 8;
+      accBits -= 8;
+      if (blockLen === 255) { out.byte(255); out.bytes(lzwBlock); blockLen = 0; }
+    }
+  };
+
+  out.byte(minCodeSize);
+  lzwTable.fill(0);
+  put(clear);
+  let prefix = pixels[0];
+  for (let i = 1; i < count; i++) {
+    const k = pixels[i];
+    const key = (prefix << 8) | k;
+    const hit = lzwTable[key];
+    if (hit !== 0) { prefix = hit; continue; }
+    put(prefix);
+    if (nextCode === 4096) {
+      put(clear);
+      lzwTable.fill(0);
+      nextCode = eoi + 1;
+      codeSize = minCodeSize + 1;
+    } else {
+      if (nextCode >= (1 << codeSize)) codeSize++;
+      lzwTable[key] = nextCode++;
+    }
+    prefix = k;
+  }
+  put(prefix);
+  put(eoi);
+  if (accBits > 0) { lzwBlock[blockLen++] = acc & 255; }
+  if (blockLen > 0) { out.byte(blockLen); out.bytes(lzwBlock.subarray(0, blockLen)); }
+  out.byte(0);
+}
+
+// ---- palette -------------------------------------------------------------
+// Returns { colours: Uint8Array (r,g,b,...), lossless }.
+function buildPalette(a, b, count) {
+  // Images with few colours (screenshots, UI, flat art) are kept exactly.
+  const seen = new Set();
+  scan: for (const px of [a, b]) {
+    let last = -1;
+    for (let i = 0, p = 0; i < count; i++, p += 4) {
+      const key = (px[p] << 16) | (px[p + 1] << 8) | px[p + 2];
+      if (key === last) continue;
+      last = key;
+      seen.add(key);
+      if (seen.size > MAX_COLORS) break scan;
+    }
+  }
+  if (seen.size <= MAX_COLORS) {
+    const list = Array.from(seen).sort((x, y) => x - y);
+    const flat = new Uint8Array(list.length * 3);
+    list.forEach((k, i) => { flat[i * 3] = k >> 16; flat[i * 3 + 1] = (k >> 8) & 255; flat[i * 3 + 2] = k & 255; });
+    return { colours: flat, lossless: true };
+  }
+
+  // Photographic content: 5-bit histogram -> variance-driven box splitting -> k-means polish.
+  const BINS = 1 << 15;
+  const hist = new Float64Array(BINS), sr = new Float64Array(BINS), sg = new Float64Array(BINS), sb = new Float64Array(BINS);
+  for (const px of [a, b]) {
+    for (let i = 0, p = 0; i < count; i++, p += 4) {
+      const r = px[p], g = px[p + 1], bl = px[p + 2];
+      const bin = ((r >> 3) << 10) | ((g >> 3) << 5) | (bl >> 3);
+      hist[bin]++; sr[bin] += r; sg[bin] += g; sb[bin] += bl;
+    }
+  }
+  let m = 0;
+  for (let i = 0; i < BINS; i++) if (hist[i] > 0) m++;
+  const ir = new Float32Array(m), ig = new Float32Array(m), ib = new Float32Array(m), iw = new Float32Array(m);
+  for (let i = 0, j = 0; i < BINS; i++) {
+    if (hist[i] === 0) continue;
+    ir[j] = sr[i] / hist[i]; ig[j] = sg[i] / hist[i]; ib[j] = sb[i] / hist[i];
+    iw[j] = Math.pow(hist[i], 0.75);   // damp dominant colours so rarer (often the interesting) ones still get slots
+    j++;
+  }
+
+  const order = new Int32Array(m);
+  for (let j = 0; j < m; j++) order[j] = j;
+  const measure = (s, e) => {
+    let w = 0, mr = 0, mg = 0, mb = 0;
+    for (let k = s; k < e; k++) { const j = order[k], wj = iw[j]; w += wj; mr += ir[j] * wj; mg += ig[j] * wj; mb += ib[j] * wj; }
+    mr /= w; mg /= w; mb /= w;
+    let vr = 0, vg = 0, vb = 0;
+    for (let k = s; k < e; k++) {
+      const j = order[k], wj = iw[j];
+      const dr = ir[j] - mr, dg = ig[j] - mg, db = ib[j] - mb;
+      vr += wj * dr * dr; vg += wj * dg * dg; vb += wj * db * db;
+    }
+    vr *= WR; vg *= WG; vb *= WB;
+    return { s, e, mr, mg, mb, vr, vg, vb, score: vr + vg + vb };
+  };
+  const boxes = [measure(0, m)];
+  while (boxes.length < MAX_COLORS) {
+    let bi = -1, best = 0;
+    for (let i = 0; i < boxes.length; i++) {
+      const bx = boxes[i];
+      if (bx.e - bx.s > 1 && bx.score > best) { best = bx.score; bi = i; }
+    }
+    if (bi < 0) break;
+    const bx = boxes[bi];
+    let arr = ir, thr = bx.mr, top = bx.vr;
+    if (bx.vg > top) { arr = ig; thr = bx.mg; top = bx.vg; }
+    if (bx.vb > top) { arr = ib; thr = bx.mb; }
+    let lo = bx.s, hi = bx.e - 1;
+    while (lo <= hi) {
+      if (arr[order[lo]] <= thr) lo++;
+      else { const t = order[lo]; order[lo] = order[hi]; order[hi] = t; hi--; }
+    }
+    if (lo === bx.s || lo === bx.e) { bx.score = 0; continue; }
+    boxes[bi] = measure(bx.s, lo);
+    boxes.push(measure(lo, bx.e));
+  }
+
+  const k = boxes.length;
+  const pr = new Float64Array(k), pg = new Float64Array(k), pb = new Float64Array(k);
+  boxes.forEach((bx, i) => { pr[i] = bx.mr; pg[i] = bx.mg; pb[i] = bx.mb; });
+  for (let iter = 0; iter < 6; iter++) {
+    const sums = new Float64Array(k * 4);
+    for (let j = 0; j < m; j++) {
+      let bestC = 0, bestD = Infinity;
+      for (let c = 0; c < k; c++) {
+        const dr = pr[c] - ir[j], dg = pg[c] - ig[j], db = pb[c] - ib[j];
+        const d = WR * dr * dr + WG * dg * dg + WB * db * db;
+        if (d < bestD) { bestD = d; bestC = c; }
+      }
+      const o = bestC * 4, wj = iw[j];
+      sums[o] += ir[j] * wj; sums[o + 1] += ig[j] * wj; sums[o + 2] += ib[j] * wj; sums[o + 3] += wj;
+    }
+    for (let c = 0; c < k; c++) {
+      const wsum = sums[c * 4 + 3];
+      if (wsum > 0) { pr[c] = sums[c * 4] / wsum; pg[c] = sums[c * 4 + 1] / wsum; pb[c] = sums[c * 4 + 2] / wsum; }
+    }
+  }
+  const flat = new Uint8Array(k * 3);
+  for (let c = 0; c < k; c++) {
+    flat[c * 3] = Math.round(pr[c]); flat[c * 3 + 1] = Math.round(pg[c]); flat[c * 3 + 2] = Math.round(pb[c]);
+  }
+  return { colours: flat, lossless: false };
+}
+
+// Nearest palette entry, cached on a 6-bit-per-channel grid.
+function makeMatcher(pal, count) {
+  const cache = new Uint16Array(1 << 18);
+  return (r, g, b) => {
+    const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+    const hit = cache[key];
+    if (hit) return hit - 1;
+    const cr = (r & 252) | 2, cg = (g & 252) | 2, cb = (b & 252) | 2;
+    let best = 0, bestD = 1e9;
+    for (let j = 0, p = 0; j < count; j++, p += 3) {
+      const dr = pal[p] - cr, dg = pal[p + 1] - cg, db = pal[p + 2] - cb;
+      const d = WR * dr * dr + WG * dg * dg + WB * db * db;
+      if (d < bestD) { bestD = d; best = j; }
+    }
+    cache[key] = best + 1;
+    return best;
+  };
+}
+
+// Straight nearest-colour mapping (no dithering).
+function mapPlain(src, count, nearest) {
+  const out = new Uint8Array(count);
+  for (let i = 0, p = 0; i < count; i++, p += 4) out[i] = nearest(src[p], src[p + 1], src[p + 2]);
+  return out;
+}
+
+// Exact mapping for images that fit the palette losslessly.
+function mapExact(src, count, colours) {
+  const lookup = new Map();
+  for (let i = 0; i < colours.length / 3; i++) {
+    const key = (colours[i * 3] << 16) | (colours[i * 3 + 1] << 8) | colours[i * 3 + 2];
+    if (!lookup.has(key)) lookup.set(key, i);
+  }
+  const out = new Uint8Array(count);
+  for (let i = 0, p = 0; i < count; i++, p += 4) out[i] = lookup.get((src[p] << 16) | (src[p + 1] << 8) | src[p + 2]);
+  return out;
+}
+
+// Serpentine Floyd-Steinberg. When `ref` is given, pixels that (nearly) match the
+// reference image copy its palette index and diffusion error, so unchanged areas
+// dither identically in both images instead of shimmering as the bar passes.
+function ditherFS(src, w, h, nearest, pal, ref, keepErr) {
+  const out = new Uint8Array(w * h);
+  const errStore = keepErr ? new Float32Array(w * h * 3) : null;
+  // Damped and clamped diffusion: full-strength FS can drag a pixel to a distant palette entry
+  // (e.g. a stray red in a blue-to-cream sky) when the palette is sparse around a gradient.
+  const TOL = 2, CLAMP = 16, STR = 0.85;
+  let cur = new Float32Array((w + 2) * 3), nxt = new Float32Array((w + 2) * 3);
+  for (let y = 0; y < h; y++) {
+    const dir = (y & 1) === 0 ? 1 : -1;
+    nxt.fill(0);
+    for (let s = 0; s < w; s++) {
+      const x = dir === 1 ? s : w - 1 - s;
+      const i = y * w + x, p = i * 4;
+      let idx, er, eg, eb;
+      if (ref && Math.abs(src[p] - ref.src[p]) <= TOL && Math.abs(src[p + 1] - ref.src[p + 1]) <= TOL && Math.abs(src[p + 2] - ref.src[p + 2]) <= TOL) {
+        idx = ref.idx[i]; er = ref.err[i * 3]; eg = ref.err[i * 3 + 1]; eb = ref.err[i * 3 + 2];
+      } else {
+        const e = (x + 1) * 3;
+        let r = src[p] + cur[e], g = src[p + 1] + cur[e + 1], b = src[p + 2] + cur[e + 2];
+        r = r < 0 ? 0 : r > 255 ? 255 : r;
+        g = g < 0 ? 0 : g > 255 ? 255 : g;
+        b = b < 0 ? 0 : b > 255 ? 255 : b;
+        idx = nearest((r + 0.5) | 0, (g + 0.5) | 0, (b + 0.5) | 0);
+        er = (r - pal[idx * 3]) * STR; eg = (g - pal[idx * 3 + 1]) * STR; eb = (b - pal[idx * 3 + 2]) * STR;
+        er = er < -CLAMP ? -CLAMP : er > CLAMP ? CLAMP : er;
+        eg = eg < -CLAMP ? -CLAMP : eg > CLAMP ? CLAMP : eg;
+        eb = eb < -CLAMP ? -CLAMP : eb > CLAMP ? CLAMP : eb;
+      }
+      out[i] = idx;
+      if (errStore) { errStore[i * 3] = er; errStore[i * 3 + 1] = eg; errStore[i * 3 + 2] = eb; }
+      const ahead = (x + 1 + dir) * 3, here = (x + 1) * 3, behind = (x + 1 - dir) * 3;
+      cur[ahead] += er * 0.4375; cur[ahead + 1] += eg * 0.4375; cur[ahead + 2] += eb * 0.4375;
+      nxt[behind] += er * 0.1875; nxt[behind + 1] += eg * 0.1875; nxt[behind + 2] += eb * 0.1875;
+      nxt[here] += er * 0.3125; nxt[here + 1] += eg * 0.3125; nxt[here + 2] += eb * 0.3125;
+      nxt[ahead] += er * 0.0625; nxt[ahead + 1] += eg * 0.0625; nxt[ahead + 2] += eb * 0.0625;
+    }
+    const t = cur; cur = nxt; nxt = t;
+  }
+  return { idx: out, err: errStore };
+}
+
+// ---- main job ---------------------------------------------------------------
+function createGif(job) {
+  const { w, h, fps, seconds, dither } = job;
+  const count = w * h;
+  const a = new Uint8ClampedArray(job.a), b = new Uint8ClampedArray(job.b);
+  const spr = new Uint8ClampedArray(job.sprite.data);
+  const ext = job.sprite.ext, sw = job.sprite.sw;
+  const WHITE_RGB = job.white, DARK_RGB = job.dark;
+
+  progress('Choosing the best 256 colours…', 0.03);
+  const { colours, lossless } = buildPalette(a, b, count);
+  const n = colours.length / 3;
+  const TRANSP = n + RAMP;
+  const used = n + RAMP;          // slots a pixel may take (everything except "transparent")
+  const total = n + RAMP + 1;
+  let bits = 1;
+  while ((1 << bits) < total) bits++;
+  const palSize = 1 << bits;
+  const minCode = Math.max(2, bits);
+
+  const pal = new Uint8Array(palSize * 3);
+  pal.set(colours, 0);
+  for (let k = 0; k < RAMP; k++) {
+    for (let c = 0; c < 3; c++) pal[(n + k) * 3 + c] = Math.round(WHITE_RGB[c] + (DARK_RGB[c] - WHITE_RGB[c]) * (k / (RAMP - 1)));
+  }
+  const nearest = makeMatcher(pal, used);
+  // Solid bar pixels are only ever white, dark or a blend of the two, so snap them to the
+  // grey ramp rather than to whichever photo colour happens to be closest.
+  const nearestRamp = (r, g, b) => {
+    let best = n, bestD = 1e9;
+    for (let k = 0; k < RAMP; k++) {
+      const o = (n + k) * 3;
+      const dr = pal[o] - r, dg = pal[o + 1] - g, db = pal[o + 2] - b;
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bestD) { bestD = d; best = n + k; }
+    }
+    return best;
+  };
+
+  let idxA, idxB;
+  if (lossless) {
+    progress('Mapping colours…', 0.12);
+    idxA = mapExact(a, count, colours);
+    idxB = mapExact(b, count, colours);
+  } else if (dither) {
+    progress('Dithering image 1…', 0.14);
+    const first = ditherFS(a, w, h, nearest, pal, null, true);
+    progress('Dithering image 2…', 0.26);
+    const second = ditherFS(b, w, h, nearest, pal, { src: a, idx: first.idx, err: first.err }, false);
+    idxA = first.idx; idxB = second.idx;
+  } else {
+    progress('Mapping colours…', 0.14);
+    idxA = mapPlain(a, count, nearest);
+    idxB = mapPlain(b, count, nearest);
+  }
+
+  // ---- GIF header ----
+  const out = new ByteSink(1 << 20);
+  out.ascii('GIF89a');
+  out.u16(w); out.u16(h);
+  out.byte(0x80 | 0x70 | (bits - 1));
+  out.byte(0); out.byte(0);
+  out.bytes(pal);
+  out.byte(0x21); out.byte(0xFF); out.byte(0x0B); out.ascii('NETSCAPE2.0');
+  out.byte(3); out.byte(1); out.u16(0); out.byte(0);      // loop forever
+
+  // ---- frames ----
+  const frames = Math.round(fps * seconds);
+  const delay = Math.round(100 / fps);                     // centiseconds
+  const state = new Uint8Array(count).fill(TRANSP);        // what a viewer has on screen so far
+  const cand = new Uint8Array(count);
+  const tile = new Uint8Array(count);
+  let prevSplit = 0;
+
+  for (let f = 0; f < frames; f++) {
+    // Sine path: middle -> far left (t=1/4) -> far right (t=3/4) -> middle. Position and
+    // velocity match at t=0 and t=1, so the loop seam is invisible.
+    const t = f / frames;
+    const split = Math.round((0.5 - 0.5 * Math.sin(2 * Math.PI * t)) * w);
+    const c0 = f === 0 ? 0 : Math.max(0, Math.min(prevSplit, split) - ext);
+    const c1 = f === 0 ? w : Math.min(w, Math.max(prevSplit, split) + ext + 1);
+
+    let x0 = w, x1 = -1, y0 = h, y1 = -1;
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = c0; x < c1; x++) {
+        const o = row + x;
+        let v = x < split ? idxA[o] : idxB[o];
+        const sc = x - split + ext;
+        if (sc >= 0 && sc < sw) {
+          const sp = (y * sw + sc) * 4, al = spr[sp + 3];
+          if (al !== 0) {
+            if (al === 255) {
+              v = nearestRamp(spr[sp], spr[sp + 1], spr[sp + 2]);
+            } else {
+              const u = v * 3, q = al / 255;
+              v = nearest(
+                (pal[u] + (spr[sp] - pal[u]) * q + 0.5) | 0,
+                (pal[u + 1] + (spr[sp + 1] - pal[u + 1]) * q + 0.5) | 0,
+                (pal[u + 2] + (spr[sp + 2] - pal[u + 2]) * q + 0.5) | 0);
+            }
+          }
+        }
+        cand[o] = v;
+        if (v !== state[o]) {
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          y1 = y;
+        }
+      }
+    }
+    if (x1 < 0) { x0 = 0; x1 = 0; y0 = 0; y1 = 0; }       // nothing moved: keep timing with a 1px no-op frame
+
+    const fw = x1 - x0 + 1, fh = y1 - y0 + 1;
+    let k = 0;
+    for (let y = y0; y <= y1; y++) {
+      const row = y * w;
+      for (let x = x0; x <= x1; x++) {
+        const o = row + x;
+        const v = (x >= c0 && x < c1) ? cand[o] : state[o];
+        tile[k++] = v === state[o] ? TRANSP : v;
+        state[o] = v;
+      }
+    }
+
+    out.byte(0x21); out.byte(0xF9); out.byte(4);
+    out.byte((1 << 2) | 1);                                // leave in place + has transparency
+    out.u16(delay); out.byte(TRANSP); out.byte(0);
+    out.byte(0x2C); out.u16(x0); out.u16(y0); out.u16(fw); out.u16(fh); out.byte(0);
+    lzwCompress(tile, fw * fh, minCode, out);
+
+    prevSplit = split;
+    progress(`Encoding frame ${f + 1} of ${frames}…`, 0.4 + 0.6 * ((f + 1) / frames));
+  }
+  out.byte(0x3B);
+  return out.result();
+}
+</script>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  const BACKGROUNDS = { dark: '#0f1115', gray: '#7f8590', light: '#f2f3f5' };
+  const WHITE = [255, 255, 255];
+  const DARK = [20, 22, 28];
+  const LOOP_SECONDS = 4;
+
+  const els = {
+    notice: $('#notice'),
+    stage: $('#stage'), stageEmpty: $('#stageEmpty'), dragHint: $('#dragHint'),
+    imgs: [$('#imgA'), $('#imgB')],
+    tags: [$('#tagA'), $('#tagB')],
+    handle: $('#handle'),
+    swap: $('#btnSwap'),
+    size: $('#optSize'), sizeHint: $('#sizeHint'), fps: $('#optFps'), dither: $('#optDither'),
+    make: $('#btnGif'), cancel: $('#btnCancel'),
+    progress: $('#progress'), fill: $('#progressFill'), progressText: $('#progressText'),
+    result: $('#result'), preview: $('#gifPreview'), info: $('#resultInfo'), download: $('#btnDownload'),
+  };
+  const slotEls = $$('.slot').map((root) => ({
+    root,
+    thumb: $('.thumb', root), name: $('.slot-name', root), dims: $('.slot-dims', root),
+    button: $('.slot-btn', root), input: $('input[type=file]', root),
+  }));
+
+  /** @type {({file: File, url: string, img: HTMLImageElement, w: number, h: number, name: string}|null)[]} */
+  const slots = [null, null];
+  let pos = 0.5;
+  let busy = false;
+  let worker = null;
+  let gifUrl = null;
+
+  // ------------------------------------------------------------------ helpers
+  function showNotice(text) {
+    els.notice.textContent = text;
+    els.notice.hidden = !text;
+  }
+  const fmtBytes = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(2)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  const radio = (name) => $(`input[name=${name}]:checked`).value;
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+  // -------------------------------------------------------------- comparison
+  function setPos(v) {
+    pos = clamp01(v);
+    els.stage.style.setProperty('--pos', pos);
+    els.handle.setAttribute('aria-valuenow', String(Math.round(pos * 100)));
+    els.tags[0].classList.toggle('off', pos < 0.16);
+    els.tags[1].classList.toggle('off', pos > 0.84);
+  }
+
+  function posFromEvent(e) {
+    const r = els.stage.getBoundingClientRect();
+    setPos((e.clientX - r.left) / r.width);
+  }
+
+  let dragging = false;
+  els.stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    els.stage.setPointerCapture(e.pointerId);
+    posFromEvent(e);
+    els.handle.focus({ preventScroll: true });
+    e.preventDefault();
+  });
+  els.stage.addEventListener('pointermove', (e) => { if (dragging) posFromEvent(e); });
+  const endDrag = () => { dragging = false; };
+  els.stage.addEventListener('pointerup', endDrag);
+  els.stage.addEventListener('pointercancel', endDrag);
+  els.stage.addEventListener('lostpointercapture', endDrag);
+
+  els.handle.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.1 : 0.01;
+    const moves = { ArrowLeft: -step, ArrowDown: -step, ArrowRight: step, ArrowUp: step, PageDown: -0.1, PageUp: 0.1 };
+    if (e.key in moves) setPos(pos + moves[e.key]);
+    else if (e.key === 'Home') setPos(0);
+    else if (e.key === 'End') setPos(1);
+    else return;
+    e.preventDefault();
+  });
+
+  // ------------------------------------------------------------ view options
+  function applyView() {
+    els.stage.classList.toggle('fit-fill', radio('fit') === 'fill');
+    document.documentElement.style.setProperty('--stage-bg', BACKGROUNDS[radio('bg')]);
+  }
+  $$('input[name=fit], input[name=bg]').forEach((r) => r.addEventListener('change', () => { applyView(); clearResult(); }));
+
+  // Both images are fitted into a stage shaped like the larger of the two.
+  function referenceSize() {
+    const [a, b] = slots;
+    return a.w * a.h >= b.w * b.h ? { w: a.w, h: a.h } : { w: b.w, h: b.h };
+  }
+
+  function gifSize() {
+    const ref = referenceSize();
+    const scale = Math.min(1, Number(els.size.value) / Math.max(ref.w, ref.h));
+    return { w: Math.max(1, Math.round(ref.w * scale)), h: Math.max(1, Math.round(ref.h * scale)) };
+  }
+
+  function refreshSizeHint() {
+    if (slots[0] && slots[1]) {
+      const s = gifSize();
+      els.sizeHint.textContent = `→ ${s.w} × ${s.h}`;
+    } else {
+      els.sizeHint.textContent = '';
+    }
+  }
+  els.size.addEventListener('change', refreshSizeHint);
+
+  // ------------------------------------------------------------------ slots
+  function renderSlots() {
+    slotEls.forEach((s, i) => {
+      const data = slots[i];
+      s.root.classList.toggle('filled', !!data);
+      s.thumb.style.backgroundImage = data ? `url("${data.url}")` : '';
+      s.name.textContent = data ? data.name : 'Drop an image or choose a file';
+      s.name.title = data ? data.name : '';
+      s.dims.textContent = data ? `${data.w} × ${data.h} px · ${fmtBytes(data.file.size)}` : '';
+      s.button.textContent = data ? 'Replace…' : 'Choose…';
+    });
+
+    const ready = !!(slots[0] && slots[1]);
+    els.stage.hidden = !ready;
+    els.stageEmpty.hidden = ready;
+    els.dragHint.hidden = !ready;
+    els.swap.disabled = !ready || busy;
+    els.make.disabled = !ready || busy;
+    if (ready) {
+      const ref = referenceSize();
+      els.stage.style.setProperty('--ar', String(ref.w / ref.h));
+      slots.forEach((d, i) => {
+        if (els.imgs[i].dataset.src !== d.url) { els.imgs[i].src = d.url; els.imgs[i].dataset.src = d.url; }
+        els.imgs[i].alt = d.name;
+        els.tags[i].textContent = d.name;
+      });
+      setPos(pos);
+    }
+    refreshSizeHint();
+  }
+
+  async function loadInto(i, file) {
+    const looksLikeImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(file.name);
+    if (!looksLikeImage) { showNotice(`“${file.name}” doesn’t look like an image file.`); return false; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = url;
+    try {
+      await img.decode();
+    } catch (err) {
+      URL.revokeObjectURL(url);
+      showNotice(`Couldn’t read “${file.name}”. Try a PNG, JPEG, WebP or GIF.`);
+      return false;
+    }
+    if (!img.naturalWidth || !img.naturalHeight) {
+      URL.revokeObjectURL(url);
+      showNotice(`“${file.name}” has no usable size.`);
+      return false;
+    }
+    if (slots[i]) URL.revokeObjectURL(slots[i].url);
+    slots[i] = { file, url, img, w: img.naturalWidth, h: img.naturalHeight, name: file.name };
+    showNotice('');
+    return true;
+  }
+
+  async function loadFiles(assignments) {
+    if (busy) return;
+    let changed = false;
+    for (const [i, file] of assignments) changed = (await loadInto(i, file)) || changed;
+    if (changed) { clearResult(); renderSlots(); }
+  }
+
+  slotEls.forEach((s, i) => {
+    s.button.addEventListener('click', () => s.input.click());
+    s.input.addEventListener('change', () => {
+      if (s.input.files[0]) loadFiles([[i, s.input.files[0]]]);
+      s.input.value = '';
+    });
+    for (const type of ['dragenter', 'dragover']) {
+      s.root.addEventListener(type, (e) => { if (hasFiles(e) && !busy) { e.preventDefault(); e.stopPropagation(); s.root.classList.add('dragover'); } });
+    }
+    for (const type of ['dragleave', 'drop']) {
+      s.root.addEventListener(type, () => s.root.classList.remove('dragover'));
+    }
+    s.root.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      const files = imageFiles(e);
+      const list = [];
+      if (files[0]) list.push([i, files[0]]);
+      if (files[1]) list.push([1 - i, files[1]]);
+      loadFiles(list);
+    });
+  });
+
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  const imageFiles = (e) => Array.from(e.dataTransfer.files);
+
+  // Dropping on the page (outside a slot) fills empty slots in order, or replaces both with two files.
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const files = imageFiles(e);
+    if (!files.length) return;
+    if (files.length >= 2) return loadFiles([[0, files[0]], [1, files[1]]]);
+    const empty = slots[0] ? (slots[1] ? -1 : 1) : 0;
+    if (empty === -1) showNotice('Both slots are full — drop the file onto Image 1 or Image 2 to replace it.');
+    else loadFiles([[empty, files[0]]]);
+  });
+
+  els.swap.addEventListener('click', () => {
+    [slots[0], slots[1]] = [slots[1], slots[0]];
+    clearResult();
+    renderSlots();
+  });
+
+  // ---------------------------------------------------------------- GIF export
+  // Draw an image at target size using repeated halving so big downscales stay crisp.
+  function scaledCanvas(img, tw, th) {
+    let src = img, sw = img.naturalWidth, sh = img.naturalHeight;
+    while (sw / 2 >= tw && sh / 2 >= th) {
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(sw / 2); c.height = Math.ceil(sh / 2);
+      const cx = c.getContext('2d');
+      cx.imageSmoothingQuality = 'high';
+      cx.drawImage(src, 0, 0, c.width, c.height);
+      src = c; sw = c.width; sh = c.height;
+    }
+    const out = document.createElement('canvas');
+    out.width = tw; out.height = th;
+    const ox = out.getContext('2d');
+    ox.imageSmoothingQuality = 'high';
+    ox.drawImage(src, 0, 0, tw, th);
+    return out;
+  }
+
+  function renderLayer(slot, w, h, fit, bg) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    let dw = w, dh = h, dx = 0, dy = 0;
+    if (fit === 'contain') {
+      const s = Math.min(w / slot.w, h / slot.h);
+      dw = Math.max(1, Math.round(slot.w * s)); dh = Math.max(1, Math.round(slot.h * s));
+      dx = Math.round((w - dw) / 2); dy = Math.round((h - dh) / 2);
+    }
+    ctx.drawImage(scaledCanvas(slot.img, dw, dh), dx, dy);
+    return ctx.getImageData(0, 0, w, h).data;
+  }
+
+  // The bar + handle, drawn once (anti-aliased) as a strip centred on column `ext`.
+  function renderSprite(w, h) {
+    const u = Math.min(w, h) / 720;
+    const outline = Math.max(1, Math.round(u));
+    const core = 2 * Math.max(1, Math.round(u * 1.5));
+    const lineW = core + 2 * outline;                        // even, so it centres on the split
+    const R = Math.max(14, Math.round(0.036 * Math.min(w, h)));
+    const ring = Math.max(2, Math.round(R * 0.13));
+    const ext = Math.ceil(Math.max(R, lineW / 2)) + 2;
+    const sw = ext * 2 + 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = sw; canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+
+    ctx.fillStyle = rgb(DARK);
+    ctx.fillRect(ext - lineW / 2, 0, lineW, h);
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(ext - lineW / 2 + outline, 0, core, h);
+
+    const cy = h / 2;
+    ctx.fillStyle = rgb(DARK);
+    ctx.beginPath(); ctx.arc(ext, cy, R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = rgb(WHITE);
+    ctx.beginPath(); ctx.arc(ext, cy, R - ring, 0, Math.PI * 2); ctx.fill();
+
+    const gap = R * 0.2, half = R * 0.34, tip = R * 0.38;
+    ctx.fillStyle = rgb(DARK);
+    ctx.beginPath();
+    ctx.moveTo(ext - gap, cy - half); ctx.lineTo(ext - gap - tip, cy); ctx.lineTo(ext - gap, cy + half);
+    ctx.moveTo(ext + gap, cy - half); ctx.lineTo(ext + gap + tip, cy); ctx.lineTo(ext + gap, cy + half);
+    ctx.fill();
+
+    return { ext, sw, data: ctx.getImageData(0, 0, sw, h).data };
+  }
+
+  function setBusy(on) {
+    busy = on;
+    els.make.hidden = on;
+    els.cancel.hidden = !on;
+    els.progress.hidden = !on;
+    els.swap.disabled = on || !(slots[0] && slots[1]);
+    slotEls.forEach((s) => { s.button.disabled = on; });
+    [els.size, els.fps, els.dither].forEach((c) => { c.disabled = on; });
+  }
+
+  function clearResult() {
+    els.result.hidden = true;
+    els.preview.removeAttribute('src');
+    if (gifUrl) { URL.revokeObjectURL(gifUrl); gifUrl = null; }
+  }
+
+  function stopWorker() {
+    if (worker) { worker.terminate(); worker = null; }
+  }
+
+  function fileBase(name) {
+    return name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'image';
+  }
+
+  function makeGif() {
+    if (busy || !(slots[0] && slots[1])) return;
+    showNotice('');
+    clearResult();
+    setBusy(true);
+    els.fill.style.width = '0%';
+    els.progressText.textContent = 'Preparing images…';
+
+    const started = performance.now();
+    const { w, h } = gifSize();
+    const fit = radio('fit');
+    const bg = BACKGROUNDS[radio('bg')];
+    const fps = Number(els.fps.value);
+    const names = [slots[0].name, slots[1].name];
+
+    let job, transfer;
+    try {
+      const a = renderLayer(slots[0], w, h, fit, bg);
+      const b = renderLayer(slots[1], w, h, fit, bg);
+      const sprite = renderSprite(w, h);
+      job = {
+        w, h, fps, seconds: LOOP_SECONDS, dither: els.dither.checked,
+        a: a.buffer, b: b.buffer, sprite: { ext: sprite.ext, sw: sprite.sw, data: sprite.data.buffer },
+        white: WHITE, dark: DARK,
+      };
+      transfer = [a.buffer, b.buffer, sprite.data.buffer];
+    } catch (err) {
+      setBusy(false);
+      showNotice(`Couldn’t prepare the images: ${err.message || err}`);
+      return;
+    }
+
+    const src = $('#gif-worker-src').textContent;
+    const workerUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    try {
+      worker = new Worker(workerUrl);
+    } catch (err) {
+      URL.revokeObjectURL(workerUrl);
+      setBusy(false);
+      showNotice('This browser blocked the background worker needed to build the GIF.');
+      return;
+    }
+    URL.revokeObjectURL(workerUrl);
+
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === 'progress') {
+        els.fill.style.width = `${Math.round(msg.value * 100)}%`;
+        els.progressText.textContent = msg.stage;
+      } else if (msg.type === 'done') {
+        stopWorker();
+        const blob = new Blob([msg.bytes], { type: 'image/gif' });
+        gifUrl = URL.createObjectURL(blob);
+        els.preview.src = gifUrl;
+        els.download.href = gifUrl;
+        els.download.download = `${fileBase(names[0])}-vs-${fileBase(names[1])}.gif`;
+        const frames = fps * LOOP_SECONDS;
+        const secs = ((performance.now() - started) / 1000).toFixed(1);
+        els.info.textContent = `${w} × ${h} px · ${frames} frames · ${fps} fps · ${LOOP_SECONDS.toFixed(2)} s loop · ${fmtBytes(blob.size)} · built in ${secs} s`;
+        els.result.hidden = false;
+        setBusy(false);
+        els.result.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else if (msg.type === 'error') {
+        stopWorker();
+        setBusy(false);
+        showNotice(`Couldn’t build the GIF: ${msg.message}`);
+      }
+    };
+    worker.onerror = (e) => {
+      stopWorker();
+      setBusy(false);
+      showNotice(`Couldn’t build the GIF: ${e.message || 'the background worker failed'}`);
+    };
+    worker.postMessage(job, transfer);
+  }
+
+  els.make.addEventListener('click', makeGif);
+  els.cancel.addEventListener('click', () => { stopWorker(); setBusy(false); });
+
+  // ---------------------------------------------------------------------- init
+  applyView();
+  setPos(0.5);
+  renderSlots();
+})();
+</script>
+</body>
+</html>
